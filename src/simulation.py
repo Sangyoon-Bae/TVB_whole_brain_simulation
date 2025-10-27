@@ -20,14 +20,17 @@ from neural_peak_analysis import analyze_neural_peaks
 class BrainSimulation:
     """Whole-brain simulation using TVB framework"""
 
-    def __init__(self, num_nodes=48, num_timepoints=375, TR=0.8, model_type='wong_wang'):
+    def __init__(self, num_nodes=68, num_timepoints=375, TR=0.8, model_type='wong_wang'):
         """
         Initialize brain simulation
 
         Parameters:
         -----------
         num_nodes : int
-            Number of brain regions (48 or 360)
+            Number of brain regions (48, 68, or 360)
+            - 48: Downsampled from default TVB connectivity
+            - 68: Desikan-Killiany atlas (cortical regions)
+            - 360: HCP-MMP1 full parcellation
         num_timepoints : int
             Number of timepoints to generate (375 or 3000)
         TR : float
@@ -47,11 +50,15 @@ class BrainSimulation:
         """Setup structural connectivity"""
         print(f"Setting up connectivity for {self.num_nodes} nodes...")
 
-        # Load default connectivity and adjust for desired number of nodes
-        conn = connectivity.Connectivity.from_file()
+        if self.num_nodes == 68:
+            # Use Desikan-Killiany atlas (68 cortical regions)
+            print("Using Desikan-Killiany atlas (68 cortical regions)")
+            conn = connectivity.Connectivity.from_file('connectivity_68.zip')
 
-        if self.num_nodes == 48:
-            # Use reduced connectivity (downsample)
+        elif self.num_nodes == 48:
+            # Use reduced connectivity (downsample from default 76 regions)
+            print("Using downsampled connectivity (48 regions)")
+            conn = connectivity.Connectivity.from_file()
             indices = np.linspace(0, len(conn.weights) - 1, 48, dtype=int)
             conn.weights = conn.weights[indices][:, indices]
             conn.tract_lengths = conn.tract_lengths[indices][:, indices]
@@ -60,11 +67,14 @@ class BrainSimulation:
 
         elif self.num_nodes == 360:
             # For HCP-MMP1 360 nodes, we would need the actual connectivity matrix
-            # For now, we'll use an expanded version or TVB's default
+            # For now, we'll use TVB's default 76-region connectivity
             # In production, load actual HCP-MMP1 connectivity here
-            print("Note: Using TVB default connectivity. For true HCP-MMP1 360 nodes,")
-            print("      load actual HCP-MMP1 connectivity matrix.")
-            pass
+            print("Note: Using TVB default connectivity (76 regions).")
+            print("      For true HCP-MMP1 360 nodes, load actual HCP-MMP1 connectivity matrix.")
+            conn = connectivity.Connectivity.from_file()
+
+        else:
+            raise ValueError(f"Unsupported number of nodes: {self.num_nodes}. Choose 48, 68, or 360.")
 
         conn.configure()
         return conn
@@ -340,8 +350,8 @@ class BrainSimulation:
 
 def main():
     parser = argparse.ArgumentParser(description='Run whole-brain simulation with TVB')
-    parser.add_argument('--nodes', type=int, default=48, choices=[48, 360],
-                       help='Number of brain regions (48 or 360)')
+    parser.add_argument('--nodes', type=int, default=68, choices=[48, 68, 360],
+                       help='Number of brain regions: 48 (downsampled), 68 (Desikan-Killiany), or 360 (HCP-MMP1)')
     parser.add_argument('--timepoints', type=int, default=375,
                        help='Number of timepoints (default: 375)')
     parser.add_argument('--tr', type=float, default=0.8,

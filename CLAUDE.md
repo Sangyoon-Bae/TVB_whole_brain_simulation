@@ -4,7 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a computational neuroscience project implementing whole-brain simulations using **The Virtual Brain (TVB)** framework. The project simulates neural dynamics across large-scale brain networks using the HCP-MMP1 (Human Connectome Project Multi-Modal Parcellation) atlas with both 48-node and 360-node parcellations.
+This is a computational neuroscience project implementing whole-brain simulations using **The Virtual Brain (TVB)** framework. The project simulates neural dynamics across large-scale brain networks using multiple brain parcellation atlases:
+
+- **48 nodes**: Downsampled connectivity from TVB default atlas
+- **68 nodes**: Desikan-Killiany atlas (cortical regions) - **Default**
+- **360 nodes**: HCP-MMP1 (Human Connectome Project Multi-Modal Parcellation)
 
 **Output Format**: All results are saved as NumPy `.npy` files with shape **(ROI, timepoints)**, along with `.json` metadata files.
 
@@ -75,27 +79,33 @@ pip install -r requirements.txt
 ### Running Simulations
 
 ```bash
-# 48-node, 375 timepoints, TR=0.8s (fMRI-like, fast ~2-5 min)
+# Default: 68-node Desikan-Killiany, 375 timepoints, TR=0.8s (fMRI-like, ~5-8 min)
+python src/simulation.py --nodes 68 --timepoints 375 --tr 0.8
+
+# 48-node (downsampled), fast prototyping (~2-5 min)
 python src/simulation.py --nodes 48 --timepoints 375 --tr 0.8
 
-# 360-node, 375 timepoints, TR=0.8s (full parcellation, ~10-20 min)
+# 360-node HCP-MMP1, full parcellation (~10-20 min)
 python src/simulation.py --nodes 360 --timepoints 375 --tr 0.8
 
 # High temporal resolution: 3000 timepoints, TR=0.1s
-python src/simulation.py --nodes 48 --timepoints 3000 --tr 0.1
+python src/simulation.py --nodes 68 --timepoints 3000 --tr 0.1
 
 # Alternative models
-python src/simulation.py --nodes 48 --timepoints 375 --tr 0.8 --model kuramoto
-python src/simulation.py --nodes 48 --timepoints 375 --tr 0.8 --model generic_2d_oscillator
+python src/simulation.py --nodes 68 --timepoints 375 --tr 0.8 --model kuramoto
+python src/simulation.py --nodes 68 --timepoints 375 --tr 0.8 --model generic_2d_oscillator
 
 # Custom output path
-python src/simulation.py --nodes 48 --timepoints 375 --tr 0.8 --output results/custom.npy
+python src/simulation.py --nodes 68 --timepoints 375 --tr 0.8 --output results/custom.npy
 ```
 
 ### Visualization
 
 ```bash
-# Generate complete visualization report
+# Generate complete visualization report (default 68-node)
+python src/visualization.py --input results/sim_68nodes_375tp_TR0.8.npy --output visualizations/sim_68
+
+# For other node configurations
 python src/visualization.py --input results/sim_48nodes_375tp_TR0.8.npy --output visualizations/sim_48
 ```
 
@@ -112,21 +122,21 @@ jupyter notebook notebooks/example_simulation.ipynb
 import numpy as np
 import json
 
-# Load time series data (ROI, timepoints)
-data = np.load('results/sim_48nodes_375tp_TR0.8.npy')
-print(data.shape)  # (48, 375)
+# Load time series data (ROI, timepoints) - Default 68-node
+data = np.load('results/sim_68nodes_375tp_TR0.8.npy')
+print(data.shape)  # (68, 375)
 
 # Access individual ROI time series
 roi_0 = data[0, :]  # Time series for ROI 0
 
 # Load metadata
-with open('results/sim_48nodes_375tp_TR0.8.json') as f:
+with open('results/sim_68nodes_375tp_TR0.8.json') as f:
     metadata = json.load(f)
     print(f"TR: {metadata['TR']}, Model: {metadata['model_type']}")
 
 # Load connectivity
-conn = np.load('results/connectivity_48nodes.npy')
-print(conn.shape)  # (48, 48)
+conn = np.load('results/connectivity_68nodes.npy')
+print(conn.shape)  # (68, 68)
 ```
 
 ## Important Implementation Details
@@ -135,7 +145,7 @@ print(conn.shape)  # (48, 48)
 
 **Critical**: All simulations output arrays with shape **(ROI, timepoints)**, not (timepoints, ROI).
 
-- **ROI dimension** (first axis): Number of brain regions (48 or 360)
+- **ROI dimension** (first axis): Number of brain regions (48, 68, or 360)
 - **Timepoints dimension** (second axis): Number of time samples (e.g., 375, 3000)
 - **Data type**: float64
 - **Format**: NumPy binary (.npy)
@@ -164,6 +174,7 @@ print(conn.shape)  # (48, 48)
 ### File Naming Convention
 
 Default output: `sim_{nodes}nodes_{timepoints}tp_TR{tr}.npy`
+- Example: `sim_68nodes_375tp_TR0.8.npy` (default)
 - Example: `sim_48nodes_375tp_TR0.8.npy`
 
 Associated files:
@@ -172,10 +183,20 @@ Associated files:
 
 ### Node Configurations
 
-- **48 nodes**: Downsampled connectivity via linear indexing for faster prototyping
-- **360 nodes**: Full HCP-MMP1 parcellation (currently uses TVB default connectivity)
+- **48 nodes**: Downsampled connectivity via linear indexing from TVB default (76 regions)
+  - Use case: Fast prototyping and testing
+  - Atlas: Downsampled from TVB default atlas
 
-**NOTE**: For true HCP-MMP1 360-node simulations, replace connectivity loading in `setup_connectivity()` with actual HCP-MMP1 structural connectivity data.
+- **68 nodes** (Default): Desikan-Killiany atlas (cortical regions)
+  - Use case: Standard cortical parcellation, widely used in neuroimaging
+  - Atlas: Desikan-Killiany cortical parcellation
+  - Connectivity: `connectivity_68.zip` from TVB data
+  - Regions: 34 per hemisphere (68 total cortical regions)
+
+- **360 nodes**: HCP-MMP1 full parcellation
+  - Use case: High-resolution whole-brain simulations
+  - Atlas: Human Connectome Project Multi-Modal Parcellation v1.0
+  - Note: Currently uses TVB default connectivity. For true HCP-MMP1 360-node simulations, replace connectivity loading in `setup_connectivity()` with actual HCP-MMP1 structural connectivity data.
 
 ### Neural Mass Models
 
@@ -221,11 +242,11 @@ conn.configure()
 from scipy import signal
 
 # Load high-res data (e.g., 3000 timepoints at TR=0.1s)
-data = np.load('results/sim_48nodes_3000tp_TR0.1.npy')
+data = np.load('results/sim_68nodes_3000tp_TR0.1.npy')
 
 # Downsample to TR=0.8s (factor of 8)
 data_downsampled = signal.decimate(data, q=8, axis=1)
-# Result: (48, 375)
+# Result: (68, 375)
 ```
 
 ## File Organization
@@ -238,10 +259,14 @@ data_downsampled = signal.decimate(data, q=8, axis=1)
 
 ## Performance Considerations
 
-- 48-node simulations: ~2-5 minutes on standard laptop
-- 360-node simulations: ~10-30 minutes (scales with O(n²) for connectivity)
-- Memory usage: ~200MB for 48 nodes, ~1-2GB for 360 nodes
-- High timepoints (3000) take ~2-3x longer than 375 timepoints
+- **48-node simulations**: ~2-5 minutes on standard laptop
+- **68-node simulations** (Default): ~5-8 minutes on standard laptop
+- **360-node simulations**: ~10-30 minutes (scales with O(n²) for connectivity)
+- **Memory usage**:
+  - 48 nodes: ~200MB
+  - 68 nodes: ~300-400MB
+  - 360 nodes: ~1-2GB
+- **High timepoints** (3000) take ~2-3x longer than 375 timepoints
 
 ## Common Issues
 
