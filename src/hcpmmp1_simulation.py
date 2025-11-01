@@ -1,6 +1,7 @@
 """
 TVB Simulation with HCP-MMP1 Atlas (360 ROIs)
 Whole-brain simulation using HCP-MMP1 cortical parcellation
+WITH PARALLEL COMPUTING SUPPORT (32 CPUs)
 """
 
 import numpy as np
@@ -8,6 +9,8 @@ import argparse
 import json
 from pathlib import Path
 from datetime import datetime
+from multiprocessing import Pool, cpu_count
+import time
 
 from tvb.simulator.lab import *
 from tvb.datatypes import connectivity
@@ -19,7 +22,7 @@ class HCPMMP1Simulation:
     """
 
     def __init__(self, num_timepoints=375, TR=0.8, model_type='wong_wang',
-                 connectivity_dir='data/HCPMMP1'):
+                 connectivity_dir='data/HCPMMP1', n_workers=32):
         """
         Initialize HCP-MMP1 brain simulation
 
@@ -33,6 +36,8 @@ class HCPMMP1Simulation:
             Neural mass model ('wong_wang', 'kuramoto', 'generic_2d_oscillator')
         connectivity_dir : str
             Directory containing HCP-MMP1 connectivity files
+        n_workers : int
+            Number of parallel workers for ensemble simulations (default: 32)
         """
         self.num_nodes = 360  # HCP-MMP1 atlas
         self.num_timepoints = num_timepoints
@@ -40,6 +45,7 @@ class HCPMMP1Simulation:
         self.simulation_length = num_timepoints * TR * 1000  # Convert to ms
         self.model_type = model_type
         self.connectivity_dir = Path(connectivity_dir)
+        self.n_workers = min(n_workers, cpu_count())  # Don't exceed available CPUs
         self.simulator = None
         self.results = None
         self.region_labels = None
@@ -275,11 +281,194 @@ class HCPMMP1Simulation:
 
         return output_path
 
+    def run_ensemble_parallel(self, n_realizations=32, average=True, save_all=False):
+        """
+        Run ensemble of simulations in parallel with different noise realizations
+
+        This method uses parallel computing (32 CPUs by default) to run multiple
+        simulations with different random seeds simultaneously.
+
+        Parameters:
+        -----------
+        n_realizations : int
+            Number of simulations to run with different noise (default: 32)
+        average : bool
+            If True, return averaged results across realizations (default: True)
+        save_all : bool
+            If True, save all individual realizations (default: False)
+
+        Returns:
+        --------
+        results : dict
+            Ensemble simulation results (averaged or all realizations)
+        """
+        print("\n" + "="*70)
+        print(f"PARALLEL ENSEMBLE SIMULATION (HCP-MMP1 360 ROIs)")
+        print("="*70)
+        print(f"Number of realizations: {n_realizations}")
+        print(f"Parallel workers: {self.n_workers}")
+        print(f"Total CPU cores available: {cpu_count()}")
+        print(f"Average results: {average}")
+        print("="*70)
+        print()
+
+        # Create arguments for each realization
+        args_list = [
+            (i, self.num_timepoints, self.TR, self.simulation_length,
+             self.model_type, str(self.connectivity_dir), self.num_nodes)
+            for i in range(n_realizations)
+        ]
+
+        # Run simulations in parallel
+        start_time = time.time()
+        print(f"Starting {n_realizations} simulations in parallel with {self.n_workers} workers...")
+
+        with Pool(processes=self.n_workers) as pool:
+            all_results = pool.map(_run_single_realization_mmp, args_list)
+
+        elapsed_time = time.time() - start_time
+
+        print(f"\n✓ All {n_realizations} simulations completed!")
+        print(f"  Total time: {elapsed_time:.1f}s ({elapsed_time/60:.1f} min)")
+        print(f"  Average time per simulation: {elapsed_time/n_realizations:.1f}s")
+        print(f"  Speedup vs sequential: ~{n_realizations/(elapsed_time/(elapsed_time/n_realizations)):.1f}x")
+
+        # Process results
+        if average:
+            print("\nAveraging results across realizations...")
+            averaged_results = {}
+
+            for key in all_results[0].keys():
+                # Stack all realizations
+                stacked = np.array([r[key] for r in all_results])
+                # Average across realizations (axis 0)
+                averaged_results[key] = np.mean(stacked, axis=0)
+                print(f"  {key}: {averaged_results[key].shape}")
+
+            self.results = averaged_results
+            return averaged_results
+        else:
+            self.results = all_results
+            return all_results
+
+
+def _run_single_realization_mmp(args):
+    """
+    Worker function to run a single simulation realization for HCP-MMP1
+
+    This function is defined at module level for multiprocessing compatibility
+
+    Parameters:
+    -----------
+    args : tuple
+        (seed, num_timepoints, TR, simulation_length, model_type, connectivity_dir, num_nodes)
+
+    Returns:
+    --------
+    results : dict
+        Simulation results for this realization
+    """
+    seed, num_timepoints, TR, simulation_length, model_type, connectivity_dir, num_nodes = args
+
+    # Set random seed for reproducibility
+    np.random.seed(seed)
+
+    # Load connectivity
+    conn_dir = Path(connectivity_dir)
+    weights = np.load(conn_dir / 'mmp_weights_360.npy')
+    tract_lengths = np.load(conn_dir / 'mmp_tract_lengths_360.npy')
+    centers = np.load(conn_dir / 'mmp_centers_360.npy')
+
+    metadata_file = conn_dir / 'mmp_connectivity_360_metadata.json'
+    if metadata_file.exists():
+        with open(metadata_file, 'r') as f:
+            metadata = json.load(f)
+            region_labels = np.array(metadata.get('regions', [f"ROI_{i}" for i in range(360)]))
+    else:
+        region_labels = np.array([f"MMP_ROI_{i}" for i in range(360)])
+
+    conn = connectivity.Connectivity(
+        weights=weights,
+        tract_lengths=tract_lengths,
+        region_labels=region_labels,
+        centres=centers,
+        speed=np.array([3.0])
+    )
+    conn.configure()
+
+    # Setup model
+    if model_type == 'wong_wang':
+        model = models.ReducedWongWang()
+    elif model_type == 'kuramoto':
+        model = models.Kuramoto()
+    elif model_type == 'generic_2d_oscillator':
+        model = models.Generic2dOscillator()
+
+    # Setup coupling
+    coupling_func = coupling.Linear(a=np.array([0.0152]))
+
+    # Setup integrator with seed-specific noise
+    heunint = integrators.HeunStochastic(
+        dt=2**-4,
+        noise=noise.Additive(nsig=np.array([0.001]))
+    )
+
+    # Setup monitors
+    mon_raw = monitors.Raw()
+    mon_tavg = monitors.TemporalAverage(period=TR * 1000.0)
+    mon_bold = monitors.Bold(period=TR * 1000.0)
+
+    # Initialize simulator
+    sim = simulator.Simulator(
+        model=model,
+        connectivity=conn,
+        coupling=coupling_func,
+        integrator=heunint,
+        monitors=[mon_raw, mon_tavg, mon_bold]
+    )
+    sim.configure()
+
+    # Run simulation (suppress output)
+    results = {}
+    for data in sim(simulation_length=simulation_length):
+        for i, monitor in enumerate(sim.monitors):
+            monitor_name = monitor.__class__.__name__
+            if data[i] is not None:
+                if monitor_name not in results:
+                    results[monitor_name] = []
+                results[monitor_name].append(data[i])
+
+    # Concatenate and extract data
+    final_results = {}
+    for key in results:
+        concatenated = np.concatenate([x[1] for x in results[key] if x is not None])
+
+        # Extract first state variable
+        if len(concatenated.shape) == 4:
+            ts_data = concatenated[:, :, 0, 0]
+        elif len(concatenated.shape) == 3:
+            ts_data = concatenated[:, :, 0]
+        else:
+            ts_data = concatenated
+
+        # Truncate/pad to expected timepoints
+        if ts_data.shape[0] > num_timepoints:
+            ts_data = ts_data[:num_timepoints, :]
+        elif ts_data.shape[0] < num_timepoints:
+            padded = np.zeros((num_timepoints, num_nodes))
+            padded[:ts_data.shape[0], :] = ts_data
+            ts_data = padded
+
+        # Transpose to (ROI, timepoints)
+        final_results[key] = ts_data.T
+
+    return final_results
+
 
 def main():
     """Run HCP-MMP1 simulation"""
     parser = argparse.ArgumentParser(
-        description='Run TVB simulation with HCP-MMP1 360 cortical ROIs'
+        description='Run TVB simulation with HCP-MMP1 360 cortical ROIs (with parallel computing)'
     )
     parser.add_argument('--timepoints', type=int, default=375,
                        help='Number of timepoints (default: 375)')
@@ -292,6 +481,12 @@ def main():
                        help='Directory containing HCP-MMP1 connectivity files')
     parser.add_argument('--output', type=str, default=None,
                        help='Output file path (.npy)')
+    parser.add_argument('--parallel', action='store_true',
+                       help='Use parallel computing (32 CPUs)')
+    parser.add_argument('--n-realizations', type=int, default=32,
+                       help='Number of ensemble realizations for parallel mode (default: 32)')
+    parser.add_argument('--n-workers', type=int, default=32,
+                       help='Number of parallel workers (default: 32)')
 
     args = parser.parse_args()
 
@@ -319,15 +514,28 @@ def main():
         num_timepoints=args.timepoints,
         TR=args.tr,
         model_type=args.model,
-        connectivity_dir=args.connectivity_dir
+        connectivity_dir=args.connectivity_dir,
+        n_workers=args.n_workers
     )
 
-    sim.run_simulation()
+    if args.parallel:
+        # Run parallel ensemble simulation
+        print(f"\n🚀 PARALLEL MODE: Using {args.n_workers} CPUs")
+        sim.run_ensemble_parallel(n_realizations=args.n_realizations, average=True)
+    else:
+        # Run single simulation (original mode)
+        print("\n📌 SEQUENTIAL MODE: Using single CPU")
+        sim.run_simulation()
+
     sim.save_results(args.output)
 
     print("\n" + "="*60)
     print("Simulation Summary:")
     print(f"  Atlas: HCP-MMP1 (360 ROIs)")
+    print(f"  Mode: {'PARALLEL (ensemble)' if args.parallel else 'SEQUENTIAL (single)'}")
+    if args.parallel:
+        print(f"  Realizations: {args.n_realizations}")
+        print(f"  Workers (CPUs): {args.n_workers}")
     print(f"  Timepoints: {args.timepoints}")
     print(f"  TR: {args.tr} seconds")
     print(f"  Total duration: {args.timepoints * args.tr} seconds")
