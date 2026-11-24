@@ -36,7 +36,7 @@ Output files:
 
 Then visualize it:
 ```bash
-python src/visualization.py --input results/sim_48nodes_375tp_TR0.8.npy --output visualizations/
+python src/visualization.py --input results/sim_48nodes_375tp_TR0.8_neural.npy --output visualizations/
 ```
 
 ### Option 2: High Temporal Resolution

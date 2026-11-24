@@ -36,6 +36,15 @@ class SimulationVisualizer:
 
         # Load metadata from .json file
         metadata_path = self.results_path.with_suffix('.json')
+        if not metadata_path.exists():
+            # simulation.py saves <base>_neural.npy / <base>_bold.npy
+            # next to <base>_metadata.json
+            base_name = self.results_path.stem
+            for suffix in ('_neural', '_bold'):
+                if base_name.endswith(suffix):
+                    base_name = base_name[:-len(suffix)]
+                    break
+            metadata_path = self.results_path.with_name(f'{base_name}_metadata.json')
         if metadata_path.exists():
             with open(metadata_path, 'r') as f:
                 self.metadata = json.load(f)

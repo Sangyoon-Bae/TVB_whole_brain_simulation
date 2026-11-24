@@ -117,7 +117,7 @@ with open('results/sim_48nodes_375tp_TR0.8_metadata.json') as f:
 
 Visualize simulation results:
 ```bash
-python src/visualization.py --input results/sim_48nodes_375tp_TR0.8.npy --output visualizations/
+python src/visualization.py --input results/sim_48nodes_375tp_TR0.8_neural.npy --output visualizations/
 ```
 
 ### Interactive Exploration
