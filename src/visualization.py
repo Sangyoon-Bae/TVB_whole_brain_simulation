@@ -167,7 +167,7 @@ class SimulationVisualizer:
         # Full FC matrix
         im1 = axes[0].imshow(fc, cmap='RdBu_r', vmin=-1, vmax=1, aspect='auto')
         axes[0].set_title(f'Functional Connectivity\n'
-                         f'{self.metadata["num_nodes"]} nodes - {monitor} Monitor',
+                         f'{self.metadata["num_nodes"]} nodes',
                          fontsize=12, fontweight='bold')
         axes[0].set_xlabel('Region', fontsize=10)
         axes[0].set_ylabel('Region', fontsize=10)
